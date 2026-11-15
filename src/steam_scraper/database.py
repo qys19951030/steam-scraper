@@ -189,6 +189,9 @@ class DatabaseManager:
         Args:
             games: 待保存的游戏列表；空列表直接返回。
             commit: 是否立即提交事务。
+
+        Raises:
+            Exception: 任一写入失败时整批回滚，并重新抛出原始错误。
         """
         if not games:
             return
