@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -193,3 +194,50 @@ def test_batch_failure_rolls_back_whole_batch(database: DatabaseManager) -> None
         (10,)
     ]
     assert _history(database) == [(10, "$9.99")]
+
+
+def test_concurrent_saves_of_same_price_keep_one_row(tmp_path: Path) -> None:
+    database = DatabaseManager(tmp_path / "concurrent.db")
+    barrier = threading.Barrier(8)
+
+    def save() -> None:
+        barrier.wait()
+        for _ in range(20):
+            database.save_game(GameInfo(10, "Game", price="$9.99"))
+
+    threads = [threading.Thread(target=save) for _ in range(8)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert _history(database, 10) == [(10, "$9.99")]
+    finally:
+        database.close()
+
+
+def test_concurrent_saves_of_different_games_do_not_interfere(tmp_path: Path) -> None:
+    database = DatabaseManager(tmp_path / "concurrent.db")
+    barrier = threading.Barrier(3)
+
+    def save(app_id: int, start: int) -> None:
+        barrier.wait()
+        for index in range(start, start + 10):
+            database.save_game(GameInfo(app_id, f"Game {app_id}", price=f"${index}"))
+
+    threads = [
+        threading.Thread(target=save, args=(10, 0)),
+        threading.Thread(target=save, args=(20, 100)),
+        threading.Thread(target=save, args=(30, 200)),
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        for app_id, start in ((10, 0), (20, 100), (30, 200)):
+            assert _history(database, app_id) == [
+                (app_id, f"${index}") for index in range(start, start + 10)
+            ]
+    finally:
+        database.close()
