@@ -241,7 +241,18 @@ class DatabaseManager:
         Returns:
             按 app_id、recorded_at 升序的 (app_id, game_name, price, recorded_at) 列表。
         """
-        raise NotImplementedError
+        rows = self.conn.execute(
+            """
+            SELECT p.app_id, g.name, p.price, p.recorded_at
+            FROM price_history p
+            LEFT JOIN games g ON p.app_id = g.app_id
+            ORDER BY p.app_id, p.recorded_at, p.rowid
+            """
+        ).fetchall()
+        return [
+            (app_id, "" if name is None else name, price, recorded_at)
+            for app_id, name, price, recorded_at in rows
+        ]
 
     def _init_reviews(self) -> None:
         """迁移旧唯一约束，同时保留无法确定粒度的历史数据。

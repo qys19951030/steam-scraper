@@ -241,3 +241,22 @@ def test_concurrent_saves_of_different_games_do_not_interfere(tmp_path: Path) ->
             ]
     finally:
         database.close()
+
+
+def test_get_price_history_orders_by_app_id_and_time(database: DatabaseManager) -> None:
+    database.save_game(GameInfo(20, "Second", price="$1.99"))
+    database.save_game(GameInfo(10, "First", price="$9.99"))
+    database.save_game(GameInfo(10, "First", price="Free"))
+
+    rows = database.get_price_history()
+
+    assert [row[:3] for row in rows] == [
+        (10, "First", "$9.99"),
+        (10, "First", "Free"),
+        (20, "Second", "$1.99"),
+    ]
+    assert all(len(row[3]) == 19 for row in rows)
+
+
+def test_get_price_history_without_rows_returns_empty(database: DatabaseManager) -> None:
+    assert database.get_price_history() == []
