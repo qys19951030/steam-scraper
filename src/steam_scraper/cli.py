@@ -731,9 +731,13 @@ def run_export(config: Config, args: argparse.Namespace, ui: UIManager) -> bool:
                 if not path_str.startswith("./") and not path_str.startswith("/"):
                     path_str = f"./{path_str}"
 
-                ui.print_success(
-                    f"导出成功！文件保存在: [bold]{path_str}/steam_games.csv[/bold] & [bold]{path_str}/steam_reviews.csv[/bold]"
+                exported = (
+                    f"[bold]{path_str}/steam_games.csv[/bold] & "
+                    f"[bold]{path_str}/steam_reviews.csv[/bold]"
                 )
+                if db.get_price_history():
+                    exported += f" & [bold]{path_str}/steam_price_history.csv[/bold]"
+                ui.print_success(f"导出成功！文件保存在: {exported}")
             else:
                 # Excel 模式
                 output_file = args.output or config.output.data_path / "steam_data.xlsx"

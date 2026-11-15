@@ -102,7 +102,9 @@ def test_legacy_backfill_never_runs_after_table_exists(tmp_path: Path) -> None:
         manager.close()
 
 
-def test_price_change_appends_and_same_price_is_skipped(database: DatabaseManager) -> None:
+def test_price_change_appends_and_same_price_is_skipped(
+    database: DatabaseManager,
+) -> None:
     database.save_game(GameInfo(10, "Game", price="$9.99"))
     database.save_game(GameInfo(10, "Game", price="$9.99"))
     database.save_game(GameInfo(10, "Game", price="Free"))
@@ -193,9 +195,9 @@ def test_batch_failure_rolls_back_whole_batch(database: DatabaseManager) -> None
     finally:
         del database._append_price_history
 
-    assert database.conn.execute("SELECT app_id FROM games ORDER BY app_id").fetchall() == [
-        (10,)
-    ]
+    assert database.conn.execute(
+        "SELECT app_id FROM games ORDER BY app_id"
+    ).fetchall() == [(10,)]
     assert _history(database) == [(10, "$9.99")]
 
 
@@ -261,7 +263,9 @@ def test_get_price_history_orders_by_app_id_and_time(database: DatabaseManager) 
     assert all(len(row[3]) == 19 for row in rows)
 
 
-def test_get_price_history_without_rows_returns_empty(database: DatabaseManager) -> None:
+def test_get_price_history_without_rows_returns_empty(
+    database: DatabaseManager,
+) -> None:
     assert database.get_price_history() == []
 
 
@@ -387,6 +391,7 @@ def test_three_csv_files_are_all_replaced_on_success(
 
     database.export_to_csv(tmp_path)
 
-    assert (tmp_path / "steam_price_history.csv").read_bytes().startswith(b"\xef\xbb\xbf")
+    history_file = tmp_path / "steam_price_history.csv"
+    assert history_file.read_bytes().startswith(b"\xef\xbb\xbf")
     assert _read_csv(tmp_path / "steam_games.csv")[0]["price"] == "Free"
     assert len(_read_csv(tmp_path / "steam_price_history.csv")) == 2

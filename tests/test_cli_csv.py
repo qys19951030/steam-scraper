@@ -30,3 +30,34 @@ def test_raw_csv_option_requires_csv_format():
     with pytest.raises(SystemExit) as exc:
         main(["export", "--raw-csv"])
     assert exc.value.code == 2
+
+
+def test_csv_cli_reports_price_history_file_when_present(
+    app_config, tmp_path, monkeypatch, capsys
+):
+    database = DatabaseManager(app_config.output.db_path)
+    database.save_game(GameInfo(10, "Game", price="$9.99"))
+    database.close()
+    monkeypatch.setattr(Config, "load", lambda: app_config)
+    output = tmp_path / "exported"
+
+    main(["export", "--format", "csv", "--output", str(output)])
+
+    assert (output / "steam_price_history.csv").is_file()
+    # rich 会按终端宽度折行，去掉换行后再匹配文件名。
+    assert "steam_price_history.csv" in capsys.readouterr().out.replace("\n", "")
+
+
+def test_csv_cli_omits_price_history_when_absent(
+    app_config, tmp_path, monkeypatch, capsys
+):
+    database = DatabaseManager(app_config.output.db_path)
+    database.save_game(GameInfo(10, "Game"))
+    database.close()
+    monkeypatch.setattr(Config, "load", lambda: app_config)
+    output = tmp_path / "exported"
+
+    main(["export", "--format", "csv", "--output", str(output)])
+
+    assert not (output / "steam_price_history.csv").exists()
+    assert "steam_price_history.csv" not in capsys.readouterr().out.replace("\n", "")
