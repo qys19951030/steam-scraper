@@ -422,6 +422,14 @@ class DatabaseManager:
                 )
                 reviews_df.to_excel(writer, sheet_name="Reviews", index=False)
 
+                # 只有存在历史时才添加工作表，避免导出空表。
+                history = self.get_price_history()
+                if history:
+                    pd.DataFrame(
+                        history,
+                        columns=["app_id", "game_name", "price", "recorded_at"],
+                    ).to_excel(writer, sheet_name="PriceHistory", index=False)
+
                 # 商店文案是普通文本；openpyxl 默认把以等号开头的字符串识别为公式。
                 for sheet in writer.sheets.values():
                     for row in sheet.iter_rows():
@@ -440,6 +448,9 @@ class DatabaseManager:
         - steam_games.csv
         - steam_reviews.csv
 
+        存在价格历史时额外生成 steam_price_history.csv，三份文件一起发布；
+        没有历史时不生成该文件。
+
         Args:
             output_dir: 输出目录。
             spreadsheet_safe: 是否保护可能被电子表格解释为公式的文本；
@@ -447,7 +458,7 @@ class DatabaseManager:
         """
         import pandas as pd
 
-        from steam_scraper.utils.csv_export import write_csv_pair
+        from steam_scraper.utils.csv_export import write_csv_files
 
         # 1. 导出 Games
         games_df = pd.read_sql_query("SELECT * FROM games", self.conn)
@@ -460,16 +471,29 @@ class DatabaseManager:
         # 2. 导出 Reviews
         reviews_df = pd.read_sql_query(
             """
-            SELECT r.*, g.name as game_name 
-            FROM reviews r 
+            SELECT r.*, g.name as game_name
+            FROM reviews r
             LEFT JOIN games g ON r.app_id = g.app_id
             ORDER BY r.app_id, r.date
             """,
             self.conn,
         )
-        write_csv_pair(
-            games_df, reviews_df, output_dir, spreadsheet_safe=spreadsheet_safe
-        )
+
+        frames = [
+            (games_df, "steam_games.csv"),
+            (reviews_df, "steam_reviews.csv"),
+        ]
+
+        # 3. 存在价格历史时才导出，避免产生空文件。
+        history = self.get_price_history()
+        if history:
+            history_df = pd.DataFrame(
+                history,
+                columns=["app_id", "game_name", "price", "recorded_at"],
+            )
+            frames.append((history_df, "steam_price_history.csv"))
+
+        write_csv_files(frames, output_dir, spreadsheet_safe=spreadsheet_safe)
 
     def close(self) -> None:
         """关闭数据库连接。"""

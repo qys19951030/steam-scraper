@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import pandas as pd
 
 
@@ -46,23 +48,21 @@ def _check_writable(path: Path) -> None:
         raise PermissionError(f"CSV 输出路径不可写: {path}")
 
 
-def write_csv_pair(
-    games: pd.DataFrame,
-    reviews: pd.DataFrame,
+def write_csv_files(
+    frames: Sequence[tuple[pd.DataFrame, str]],
     output_dir: str | Path,
     *,
     spreadsheet_safe: bool = True,
 ) -> None:
-    """先生成两份 CSV，再发布；发布异常时恢复本次已替换的文件。
+    """先生成全部 CSV，再一次性发布；发布异常时恢复本次已替换的文件。
 
     默认导出适合在电子表格中打开的文本：危险文本添加单引号前缀，数值
     保持原类型。原始数据分析可关闭该选项。不会修改传入的 DataFrame。
     电子表格重新保存 CSV 可能改变文本转义，不能把后续文件视为仍受保护。
 
     Args:
-        games: 已整理字段的游戏表，写入 steam_games.csv。
-        reviews: 已整理字段的评价表，写入 steam_reviews.csv。
-        output_dir: 两份 CSV 的输出目录。
+        frames: (数据表, 文件名) 序列，按给定顺序生成和发布。
+        output_dir: CSV 的输出目录。
         spreadsheet_safe: 是否给可能触发公式的字符串添加文本前缀。
 
     Raises:
@@ -73,7 +73,7 @@ def write_csv_pair(
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
     _check_writable(directory)
-    targets = (directory / "steam_games.csv", directory / "steam_reviews.csv")
+    targets = tuple(directory / name for _, name in frames)
     for target in targets:
         if target.exists():
             if not target.is_file():
@@ -85,7 +85,7 @@ def write_csv_pair(
     published: list[Path] = []
     retain_backups = False
     try:
-        for frame, target in zip((games, reviews), targets, strict=True):
+        for (frame, _), target in zip(frames, targets, strict=True):
             exported = frame.map(_spreadsheet_text) if spreadsheet_safe else frame
             exported.to_csv(
                 temporary_dir / target.name,
@@ -95,7 +95,7 @@ def write_csv_pair(
                 quoting=csv.QUOTE_NONNUMERIC,
             )
 
-        # 两份新文件均生成成功之后才备份和替换正式文件。
+        # 全部新文件均生成成功之后才备份和替换正式文件。
         for target in targets:
             if target.exists() or target.is_symlink():
                 backup = temporary_dir / f"{target.name}.bak"
@@ -125,3 +125,30 @@ def write_csv_pair(
     finally:
         if not retain_backups:
             shutil.rmtree(temporary_dir)
+
+
+def write_csv_pair(
+    games: pd.DataFrame,
+    reviews: pd.DataFrame,
+    output_dir: str | Path,
+    *,
+    spreadsheet_safe: bool = True,
+) -> None:
+    """先生成两份 CSV，再发布；发布异常时恢复本次已替换的文件。
+
+    参数语义与 :func:`write_csv_files` 一致。
+
+    Args:
+        games: 已整理字段的游戏表，写入 steam_games.csv。
+        reviews: 已整理字段的评价表，写入 steam_reviews.csv。
+        output_dir: 两份 CSV 的输出目录。
+        spreadsheet_safe: 是否给可能触发公式的字符串添加文本前缀。
+    """
+    write_csv_files(
+        [
+            (games, "steam_games.csv"),
+            (reviews, "steam_reviews.csv"),
+        ],
+        output_dir,
+        spreadsheet_safe=spreadsheet_safe,
+    )

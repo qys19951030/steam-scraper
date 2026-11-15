@@ -1,8 +1,11 @@
+import csv
+import os
 import sqlite3
 import threading
 from pathlib import Path
 
 import pytest
+from openpyxl import load_workbook
 
 from steam_scraper.database import DatabaseManager
 from steam_scraper.models import GameInfo
@@ -260,3 +263,130 @@ def test_get_price_history_orders_by_app_id_and_time(database: DatabaseManager) 
 
 def test_get_price_history_without_rows_returns_empty(database: DatabaseManager) -> None:
     assert database.get_price_history() == []
+
+
+def _read_csv(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        return list(csv.DictReader(stream))
+
+
+def test_excel_adds_price_history_sheet_only_when_present(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    database.save_game(GameInfo(10, "Game", price="$9.99"))
+    database.conn.execute("DELETE FROM price_history")
+    database.conn.commit()
+    without_history = tmp_path / "without.xlsx"
+    database.export_to_excel(without_history)
+    workbook = load_workbook(without_history, read_only=True)
+    try:
+        assert workbook.sheetnames == ["Games", "Reviews"]
+    finally:
+        workbook.close()
+
+    database.save_game(GameInfo(10, "Game", price="Free"))
+    with_history = tmp_path / "with.xlsx"
+    database.export_to_excel(with_history)
+    workbook = load_workbook(with_history, read_only=True)
+    try:
+        assert workbook.sheetnames == ["Games", "Reviews", "PriceHistory"]
+        rows = list(workbook["PriceHistory"].values)
+        assert rows[0] == ("app_id", "game_name", "price", "recorded_at")
+        assert [(row[0], row[1], row[2]) for row in rows[1:]] == [
+            (10, "Game", "Free")
+        ]
+    finally:
+        workbook.close()
+
+
+def test_csv_price_history_export_has_expected_columns(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    database.save_game(GameInfo(20, "Second", price="$1.99"))
+    database.save_game(GameInfo(10, "First", price="$9.99"))
+    database.save_game(GameInfo(10, "First", price="Free"))
+
+    database.export_to_csv(tmp_path)
+
+    history = _read_csv(tmp_path / "steam_price_history.csv")
+    assert [(row["app_id"], row["game_name"], row["price"]) for row in history] == [
+        ("10", "First", "$9.99"),
+        ("10", "First", "Free"),
+        ("20", "Second", "$1.99"),
+    ]
+    assert set(history[0]) == {"app_id", "game_name", "price", "recorded_at"}
+
+
+def test_csv_export_without_history_keeps_two_files(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    database.save_game(GameInfo(10, "Game", price=""))
+    assert database.get_price_history() == []
+
+    output = tmp_path / "csv"
+    database.export_to_csv(output)
+
+    assert sorted(path.name for path in output.iterdir()) == [
+        "steam_games.csv",
+        "steam_reviews.csv",
+    ]
+
+
+def test_history_csv_is_spreadsheet_safe_and_utf8_sig(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    database.save_game(GameInfo(10, "Game", price="=1+1"))
+
+    database.export_to_csv(tmp_path)
+
+    raw = (tmp_path / "steam_price_history.csv").read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf")
+    assert _read_csv(tmp_path / "steam_price_history.csv")[0]["price"] == "'=1+1"
+
+
+@pytest.mark.parametrize("failure_index", [0, 1, 2])
+def test_three_csv_files_publish_or_roll_back_together(
+    database: DatabaseManager, tmp_path: Path, monkeypatch, failure_index: int
+) -> None:
+    database.save_game(GameInfo(10, "Game", price="$9.99"))
+    targets = [
+        tmp_path / "steam_games.csv",
+        tmp_path / "steam_reviews.csv",
+        tmp_path / "steam_price_history.csv",
+    ]
+    previous = [b"old games", b"old reviews", b"old history"]
+    for target, content in zip(targets, previous, strict=True):
+        target.write_bytes(content)
+
+    database.save_game(GameInfo(10, "Game", price="Free"))
+
+    original_replace = os.replace
+
+    def fail_at(source, destination):
+        if Path(destination).name == targets[failure_index].name:
+            raise OSError("simulated publish failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_at)
+
+    with pytest.raises(OSError, match="simulated"):
+        database.export_to_csv(tmp_path)
+
+    for target, content in zip(targets, previous, strict=True):
+        assert target.read_bytes() == content
+    assert list(tmp_path.glob(".steam-csv-*")) == []
+
+
+def test_three_csv_files_are_all_replaced_on_success(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    database.save_game(GameInfo(10, "Game", price="$9.99"))
+    database.save_game(GameInfo(10, "Game", price="Free"))
+    for name in ("steam_games.csv", "steam_reviews.csv", "steam_price_history.csv"):
+        (tmp_path / name).write_bytes(b"old")
+
+    database.export_to_csv(tmp_path)
+
+    assert (tmp_path / "steam_price_history.csv").read_bytes().startswith(b"\xef\xbb\xbf")
+    assert _read_csv(tmp_path / "steam_games.csv")[0]["price"] == "Free"
+    assert len(_read_csv(tmp_path / "steam_price_history.csv")) == 2
