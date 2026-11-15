@@ -121,8 +121,33 @@ class DatabaseManager:
         self.conn.commit()
 
     def _init_price_history(self) -> None:
-        """创建价格历史表，并在老库首次创建时补一条起始记录。"""
+        """创建价格历史表，并在老库首次创建时补一条起始记录。
+
+        仅当本次调用新建了该表时回填：读取所有价格非空且带 updated_at 的
+        游戏，以原 updated_at 作为起始记录时间。表已存在时不做任何补写。
+        """
+        existing = {
+            row[0]
+            for row in self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                ("price_history",),
+            )
+        }
+        created = not existing
         self.conn.execute(_PRICE_HISTORY_SCHEMA)
+        if not created:
+            return
+
+        self.conn.execute(
+            """
+            INSERT INTO price_history (app_id, price, recorded_at)
+            SELECT app_id, price, updated_at
+            FROM games
+            WHERE price IS NOT NULL AND price <> ''
+              AND updated_at IS NOT NULL AND updated_at <> ''
+            ORDER BY app_id
+            """
+        )
 
     def _append_price_history(self, game: GameInfo) -> None:
         """价格非空且与最近一条历史不同时追加记录。"""
