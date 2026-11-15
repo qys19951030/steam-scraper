@@ -521,3 +521,15 @@ def test_history_export_keeps_existing_csv_and_sheet_structure(
         assert workbook.sheetnames == ["Games", "Reviews", "PriceHistory"]
     finally:
         workbook.close()
+
+
+def test_failed_immediate_save_releases_its_transaction(
+    database: DatabaseManager,
+) -> None:
+    database.save_game(GameInfo(10, "Game", price="$9.99"))
+    database.conn.execute("ALTER TABLE price_history RENAME TO gone")
+
+    with pytest.raises(sqlite3.Error):
+        database.save_game(GameInfo(10, "Changed", price="$4.99"))
+
+    assert not database.conn.in_transaction

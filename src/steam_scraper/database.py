@@ -211,7 +211,8 @@ class DatabaseManager:
             # 外层事务使 RELEASE 不会提前提交 commit=False 的批次。
             # IMMEDIATE 先行获取写锁，多个连接并发保存时由 busy timeout 排队，
             # 避免延迟事务读后升级写锁时直接报 SQLITE_BUSY。
-            if not self.conn.in_transaction:
+            owns_transaction = not self.conn.in_transaction
+            if owns_transaction:
                 self.conn.execute("BEGIN IMMEDIATE")
             self.conn.execute("SAVEPOINT save_games")
             try:
@@ -236,6 +237,9 @@ class DatabaseManager:
                 if self.conn.in_transaction:
                     self.conn.execute("ROLLBACK TO save_games")
                     self.conn.execute("RELEASE save_games")
+                    # 本次调用开启的事务在失败后整体回滚，避免持有写锁。
+                    if owns_transaction:
+                        self.conn.rollback()
                 raise
 
     def get_price_history(self) -> list[tuple[int, str, str, str]]:
