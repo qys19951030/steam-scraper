@@ -2,9 +2,8 @@ import csv
 import os
 import sqlite3
 import threading
-from pathlib import Path
-
 from datetime import date
+from pathlib import Path
 
 import pytest
 from openpyxl import load_workbook
