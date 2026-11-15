@@ -405,3 +405,25 @@ def test_export_to_csv_reports_whether_history_was_published(
 
     assert database.export_to_csv(tmp_path) is expected
     assert (tmp_path / "steam_price_history.csv").exists() is expected
+
+
+def test_two_connections_saving_same_price_keep_one_row(tmp_path: Path) -> None:
+    db_path = tmp_path / "shared.db"
+    managers = [DatabaseManager(db_path), DatabaseManager(db_path)]
+    barrier = threading.Barrier(2)
+
+    def save(manager: DatabaseManager) -> None:
+        barrier.wait()
+        for _ in range(15):
+            manager.save_game(GameInfo(10, "Game", price="$9.99"))
+
+    threads = [threading.Thread(target=save, args=(manager,)) for manager in managers]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert _history(managers[0], 10) == [(10, "$9.99")]
+    finally:
+        for manager in managers:
+            manager.close()

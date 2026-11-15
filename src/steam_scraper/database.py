@@ -79,16 +79,18 @@ class DatabaseManager:
             db_file.parent.mkdir(parents=True, exist_ok=True)
 
         self.db_path = str(db_file)
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # 多个实例（游戏与评价爬虫）可能同时写同一文件，等待写锁而不是立刻报忙。
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
         self._history_lock = threading.RLock()
         self.init_db()
 
     def init_db(self) -> None:
         """初始化数据库表结构。
 
-        创建 games 和 reviews 两张表：
+        创建 games、reviews 和 price_history 三张表：
         - games: 存储游戏基础信息，以 app_id 为主键
         - reviews: 按 (app_id, date, granularity) 区分日、周、月统计桶
+        - price_history: 按 app_id 记录价格变化时间线
 
         旧评价表缺少粒度时，事务性迁移并保留为 unknown，等待重新采集替换。
         """
@@ -141,11 +143,14 @@ class DatabaseManager:
         self.conn.execute(
             """
             INSERT INTO price_history (app_id, price, recorded_at)
-            SELECT app_id, price, updated_at
-            FROM games
-            WHERE price IS NOT NULL AND price <> ''
-              AND updated_at IS NOT NULL AND updated_at <> ''
-            ORDER BY app_id
+            SELECT g.app_id, g.price, g.updated_at
+            FROM games g
+            WHERE g.price IS NOT NULL AND TRIM(g.price) <> ''
+              AND g.updated_at IS NOT NULL AND TRIM(g.updated_at) <> ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM price_history p WHERE p.app_id = g.app_id
+              )
+            ORDER BY g.app_id
             """
         )
 
@@ -160,24 +165,20 @@ class DatabaseManager:
         if not game.price or not game.price.strip():
             return
 
-        latest = self.conn.execute(
-            """
-            SELECT price FROM price_history
-            WHERE app_id = ?
-            ORDER BY recorded_at DESC, rowid DESC
-            LIMIT 1
-            """,
-            (game.app_id,),
-        ).fetchone()
-        if latest is not None and latest[0] == game.price:
-            return
-
+        # 单条语句内完成比较与插入，避免跨连接“先读后写”的竞态。
+        # 无历史时子查询为 NULL，`NULL IS NOT ?` 为真，因此第一条直接记录。
         self.conn.execute(
             """
             INSERT INTO price_history (app_id, price, recorded_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
+            SELECT ?, ?, CURRENT_TIMESTAMP
+            WHERE (
+                SELECT price FROM price_history
+                WHERE app_id = ?
+                ORDER BY recorded_at DESC, rowid DESC
+                LIMIT 1
+            ) IS NOT ?
             """,
-            (game.app_id, game.price),
+            (game.app_id, game.price, game.app_id, game.price),
         )
 
     def _save_games(self, games: list[GameInfo], commit: bool) -> None:
@@ -208,8 +209,10 @@ class DatabaseManager:
 
         with self._history_lock:
             # 外层事务使 RELEASE 不会提前提交 commit=False 的批次。
+            # IMMEDIATE 先行获取写锁，多个连接并发保存时由 busy timeout 排队，
+            # 避免延迟事务读后升级写锁时直接报 SQLITE_BUSY。
             if not self.conn.in_transaction:
-                self.conn.execute("BEGIN")
+                self.conn.execute("BEGIN IMMEDIATE")
             self.conn.execute("SAVEPOINT save_games")
             try:
                 self.conn.executemany(
