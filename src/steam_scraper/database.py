@@ -150,12 +150,90 @@ class DatabaseManager:
         )
 
     def _append_price_history(self, game: GameInfo) -> None:
-        """价格非空且与最近一条历史不同时追加记录。"""
-        raise NotImplementedError
+        """价格非空且与最近一条历史不同时追加记录。
+
+        调用方负责事务与并发串行化；空价格不写入，历史保留最后一次已知价格。
+
+        Args:
+            game: 即将落库的游戏信息。
+        """
+        if not game.price or not game.price.strip():
+            return
+
+        latest = self.conn.execute(
+            """
+            SELECT price FROM price_history
+            WHERE app_id = ?
+            ORDER BY recorded_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            (game.app_id,),
+        ).fetchone()
+        if latest is not None and latest[0] == game.price:
+            return
+
+        self.conn.execute(
+            """
+            INSERT INTO price_history (app_id, price, recorded_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            """,
+            (game.app_id, game.price),
+        )
 
     def _save_games(self, games: list[GameInfo], commit: bool) -> None:
-        """在同一事务中写入游戏行及其价格历史。"""
-        raise NotImplementedError
+        """在同一事务中写入游戏行及其价格历史。
+
+        任一行写入失败时回滚本次全部改动，游戏行不会先于历史落库。
+
+        Args:
+            games: 待保存的游戏列表；空列表直接返回。
+            commit: 是否立即提交事务。
+        """
+        if not games:
+            return
+
+        data = [
+            (
+                game.app_id,
+                game.name,
+                game.release_date,
+                game.price,
+                _json_dumps(game.developers),
+                _json_dumps(game.publishers),
+                _json_dumps(game.genres),
+                game.description,
+            )
+            for game in games
+        ]
+
+        with self._history_lock:
+            # 外层事务使 RELEASE 不会提前提交 commit=False 的批次。
+            if not self.conn.in_transaction:
+                self.conn.execute("BEGIN")
+            self.conn.execute("SAVEPOINT save_games")
+            try:
+                self.conn.executemany(
+                    """
+                    INSERT OR REPLACE INTO games
+                    (app_id, name, release_date, price, developers, publishers,
+                     genres, description, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    data,
+                )
+                for game in games:
+                    self._append_price_history(game)
+                if commit:
+                    # COMMIT 失败时仍保留保存点，避免后续任务意外提交失败批次。
+                    self.conn.commit()
+                else:
+                    self.conn.execute("RELEASE save_games")
+            except Exception:
+                # 某些 SQLite 错误会自动回滚整个事务，此时保存点已不存在。
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK TO save_games")
+                    self.conn.execute("RELEASE save_games")
+                raise
 
     def get_price_history(self) -> list[tuple[int, str, str, str]]:
         """返回价格历史记录，供导出使用。
@@ -197,83 +275,24 @@ class DatabaseManager:
         self.conn.execute("RELEASE review_schema")
 
     def save_game(self, game: GameInfo, commit: bool = True) -> None:
-        """保存或更新游戏信息。
+        """保存或更新游戏信息，并在同一事务中记录价格历史。
 
         Args:
             game: 游戏信息对象。
             commit: 是否立即提交事务。默认为 True。
         """
-        cursor = self.conn.cursor()
-
-        # 将列表转换为 JSON 字符串存储
-        # 使用 JSON 而非逗号分隔，因为开发商/发行商名称本身可能包含逗号
-        # ensure_ascii=False 保留中文字符的原始形式，提高可读性
-        # 使用 helper 函数进行统一序列化
-        developers_json = _json_dumps(game.developers)
-        publishers_json = _json_dumps(game.publishers)
-        genres_json = _json_dumps(game.genres)
-
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO games 
-            (app_id, name, release_date, price, developers, publishers, genres, description, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """,
-            (
-                game.app_id,
-                game.name,
-                game.release_date,
-                game.price,
-                developers_json,
-                publishers_json,
-                genres_json,
-                game.description,
-            ),
-        )
-        if commit:
-            self.conn.commit()
+        self._save_games([game], commit)
 
     def save_games_batch(self, games: list[GameInfo], commit: bool = True) -> None:
-        """批量保存或更新游戏信息。
+        """批量保存或更新游戏信息，并在同一事务中记录价格历史。
+
+        任一条历史写入失败时整批回滚。
 
         Args:
             games: 游戏信息对象列表。
             commit: 是否立即提交事务。默认为 True。
         """
-        if not games:
-            return
-
-        cursor = self.conn.cursor()
-
-        data = []
-        for game in games:
-            developers_json = _json_dumps(game.developers)
-            publishers_json = _json_dumps(game.publishers)
-            genres_json = _json_dumps(game.genres)
-
-            data.append(
-                (
-                    game.app_id,
-                    game.name,
-                    game.release_date,
-                    game.price,
-                    developers_json,
-                    publishers_json,
-                    genres_json,
-                    game.description,
-                )
-            )
-
-        cursor.executemany(
-            """
-            INSERT OR REPLACE INTO games 
-            (app_id, name, release_date, price, developers, publishers, genres, description, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """,
-            data,
-        )
-        if commit:
-            self.conn.commit()
+        self._save_games(games, commit)
 
     def commit(self) -> None:
         """提交当前事务。"""
