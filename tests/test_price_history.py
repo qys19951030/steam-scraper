@@ -4,11 +4,13 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from datetime import date
+
 import pytest
 from openpyxl import load_workbook
 
 from steam_scraper.database import DatabaseManager
-from steam_scraper.models import GameInfo
+from steam_scraper.models import GameInfo, ReviewSnapshot
 
 
 def _history(manager: DatabaseManager, app_id: int | None = None) -> list[tuple]:
@@ -427,3 +429,96 @@ def test_two_connections_saving_same_price_keep_one_row(tmp_path: Path) -> None:
     finally:
         for manager in managers:
             manager.close()
+
+
+def test_deferred_commit_batches_share_one_transaction(tmp_path: Path) -> None:
+    database = DatabaseManager(tmp_path / "deferred.db")
+    try:
+        database.save_game(GameInfo(10, "Game", price="$9.99"), commit=False)
+        database.save_game(GameInfo(20, "Other", price="Free"), commit=False)
+
+        assert database.conn.in_transaction
+        observer = sqlite3.connect(database.db_path)
+        try:
+            assert observer.execute("SELECT COUNT(*) FROM games").fetchone()[0] == 0
+        finally:
+            observer.close()
+
+        database.commit()
+        assert _history(database) == [(10, "$9.99"), (20, "Free")]
+    finally:
+        database.close()
+
+
+def test_deferred_commit_failure_leaves_previous_batches_uncommitted(
+    tmp_path: Path,
+) -> None:
+    database = DatabaseManager(tmp_path / "deferred.db")
+    try:
+        database.save_game(GameInfo(10, "Game", price="$9.99"), commit=False)
+        database.conn.execute("ALTER TABLE price_history RENAME TO gone")
+
+        with pytest.raises(sqlite3.Error):
+            database.save_game(GameInfo(20, "Other", price="Free"), commit=False)
+    finally:
+        database.close()
+
+    observer = DatabaseManager(tmp_path / "deferred.db")
+    try:
+        assert observer.conn.execute("SELECT COUNT(*) FROM games").fetchone()[0] == 0
+    finally:
+        observer.close()
+
+
+def test_price_history_sheet_keeps_formula_text_as_text(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    database.save_game(GameInfo(10, "=1+1", price="=1+1"))
+
+    output = tmp_path / "history.xlsx"
+    database.export_to_excel(output)
+
+    workbook = load_workbook(output, read_only=True, data_only=True)
+    try:
+        rows = list(workbook["PriceHistory"].values)
+        exported = dict(zip(rows[0], rows[1], strict=True))
+        assert exported["game_name"] == "=1+1"
+        assert exported["price"] == "=1+1"
+    finally:
+        workbook.close()
+
+
+def test_history_export_keeps_existing_csv_and_sheet_structure(
+    database: DatabaseManager, tmp_path: Path
+) -> None:
+    database.save_game(GameInfo(10, "Game", price="$9.99"))
+    database.save_reviews(
+        10, [ReviewSnapshot(10, date(2026, 1, 1), 3, 1)]
+    )
+
+    database.export_to_csv(tmp_path)
+    database.export_to_excel(tmp_path / "out.xlsx")
+
+    assert list(_read_csv(tmp_path / "steam_games.csv")[0]) == [
+        "app_id",
+        "name",
+        "release_date",
+        "price",
+        "developers",
+        "publishers",
+        "genres",
+        "description",
+        "updated_at",
+    ]
+    assert list(_read_csv(tmp_path / "steam_reviews.csv")[0])[:5] == [
+        "id",
+        "app_id",
+        "date",
+        "recommendations_up",
+        "recommendations_down",
+    ]
+    workbook = load_workbook(tmp_path / "out.xlsx", read_only=True)
+    try:
+        assert workbook.sheetnames == ["Games", "Reviews", "PriceHistory"]
+    finally:
+        workbook.close()
