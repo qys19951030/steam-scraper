@@ -441,7 +441,7 @@ class DatabaseManager:
 
     def export_to_csv(
         self, output_dir: str | Path, *, spreadsheet_safe: bool = True
-    ) -> None:
+    ) -> bool:
         """导出所有数据到 CSV 文件。
 
         生成两个文件：
@@ -455,6 +455,9 @@ class DatabaseManager:
             output_dir: 输出目录。
             spreadsheet_safe: 是否保护可能被电子表格解释为公式的文本；
                 设为 False 可保留机器分析使用的原始值。
+
+        Returns:
+            本次是否发布了价格历史 CSV。
         """
         import pandas as pd
 
@@ -485,8 +488,10 @@ class DatabaseManager:
         ]
 
         # 3. 存在价格历史时才导出，避免产生空文件。
+        has_history = False
         history = self.get_price_history()
         if history:
+            has_history = True
             history_df = pd.DataFrame(
                 history,
                 columns=["app_id", "game_name", "price", "recorded_at"],
@@ -494,6 +499,7 @@ class DatabaseManager:
             frames.append((history_df, "steam_price_history.csv"))
 
         write_csv_files(frames, output_dir, spreadsheet_safe=spreadsheet_safe)
+        return has_history
 
     def close(self) -> None:
         """关闭数据库连接。"""

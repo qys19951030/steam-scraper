@@ -722,7 +722,7 @@ def run_export(config: Config, args: argparse.Namespace, ui: UIManager) -> bool:
                     # 默认使用 config 中的 data_dir
                     output_dir = config.output.data_path
 
-                db.export_to_csv(
+                has_history = db.export_to_csv(
                     output_dir, spreadsheet_safe=not getattr(args, "raw_csv", False)
                 )
 
@@ -735,7 +735,7 @@ def run_export(config: Config, args: argparse.Namespace, ui: UIManager) -> bool:
                     f"[bold]{path_str}/steam_games.csv[/bold] & "
                     f"[bold]{path_str}/steam_reviews.csv[/bold]"
                 )
-                if db.get_price_history():
+                if has_history:
                     exported += f" & [bold]{path_str}/steam_price_history.csv[/bold]"
                 ui.print_success(f"导出成功！文件保存在: {exported}")
             else:

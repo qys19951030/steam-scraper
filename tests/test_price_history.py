@@ -395,3 +395,13 @@ def test_three_csv_files_are_all_replaced_on_success(
     assert history_file.read_bytes().startswith(b"\xef\xbb\xbf")
     assert _read_csv(tmp_path / "steam_games.csv")[0]["price"] == "Free"
     assert len(_read_csv(tmp_path / "steam_price_history.csv")) == 2
+
+
+@pytest.mark.parametrize("price, expected", [("$9.99", True), ("", False)])
+def test_export_to_csv_reports_whether_history_was_published(
+    database: DatabaseManager, tmp_path: Path, price: str, expected: bool
+) -> None:
+    database.save_game(GameInfo(10, "Game", price=price))
+
+    assert database.export_to_csv(tmp_path) is expected
+    assert (tmp_path / "steam_price_history.csv").exists() is expected
