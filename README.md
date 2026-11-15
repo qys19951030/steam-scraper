@@ -64,7 +64,7 @@ uv run steam-scraper all
 | `all --resume` | 从断点继续完整流程 |
 | `retry` | 重试失败任务；`--type game` / `--type review` 可限定类型 |
 | `export` | 导出 Excel；`--output report.xlsx` 可指定文件 |
-| `export --format csv` | 导出两份 CSV；`--output exports/` 可指定目录 |
+| `export --format csv` | 导出 CSV；有价格历史时额外生成一份；`--output exports/` 可指定目录 |
 | `clean` | 清理缓存、断点和失败记录，保留数据库与导出文件 |
 | `reset` | 删除配置的数据目录中的运行结果 |
 
@@ -98,9 +98,10 @@ uv run steam-scraper all
 
 | 文件 | 内容 |
 | :--- | :--- |
-| `steam_data.db` | SQLite 数据库，含 `games` 和 `reviews` 两张表 |
-| `steam_data.xlsx` | Excel 工作簿，含 `Games` 和 `Reviews` 两个工作表 |
+| `steam_data.db` | SQLite 数据库，含 `games`、`reviews` 和 `price_history` 三张表 |
+| `steam_data.xlsx` | Excel 工作簿，含 `Games` 和 `Reviews`；有价格历史时另含 `PriceHistory` |
 | `steam_games.csv`、`steam_reviews.csv` | UTF-8-SIG 编码的游戏与评价数据 |
+| `steam_price_history.csv` | 价格历史；仅在有记录时生成，与另外两份 CSV 一起发布 |
 | `.checkpoint.json` | 断点进度，供 `--resume` 使用 |
 | `failures.json` | 失败任务及原因，供 `retry` 使用 |
 

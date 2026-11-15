@@ -64,7 +64,7 @@ Prefix each command with `uv run steam-scraper`. Use `--help` or `<command> --he
 | `all --resume` | Resume the full workflow |
 | `retry` | Retry failed items; filter with `--type game` / `--type review` |
 | `export` | Export Excel; set a file with `--output report.xlsx` |
-| `export --format csv` | Export two CSV files; set a directory with `--output exports/` |
+| `export --format csv` | Export CSVs, plus a price-history file when present; set a directory with `--output exports/` |
 | `clean` | Remove caches, checkpoints, and failure logs; keep the database and exports |
 | `reset` | Delete generated results in the configured data directory |
 
@@ -98,9 +98,10 @@ Files are saved to `data/` by default. Change `output.data_dir` to use another l
 
 | File | Contents |
 | :--- | :--- |
-| `steam_data.db` | SQLite database with `games` and `reviews` tables |
-| `steam_data.xlsx` | Excel workbook with `Games` and `Reviews` worksheets |
+| `steam_data.db` | SQLite database with `games`, `reviews`, and `price_history` tables |
+| `steam_data.xlsx` | Excel workbook with `Games` and `Reviews` worksheets, plus `PriceHistory` when history exists |
 | `steam_games.csv`, `steam_reviews.csv` | Game and review data encoded as UTF-8-SIG |
+| `steam_price_history.csv` | Price history; generated only when records exist, published together with the other two CSVs |
 | `.checkpoint.json` | Progress used by `--resume` |
 | `failures.json` | Failed tasks and reasons used by `retry` |
 
