@@ -7,9 +7,19 @@
 import json
 import sqlite3
 import tempfile
+import threading
 from pathlib import Path
 
 from steam_scraper.models import GameInfo, ReviewSnapshot
+
+_PRICE_HISTORY_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS price_history (
+        app_id INTEGER NOT NULL,
+        price TEXT NOT NULL,
+        recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (app_id) REFERENCES games (app_id)
+    )
+"""
 
 _REVIEWS_SCHEMA = """
     CREATE TABLE IF NOT EXISTS reviews (
@@ -70,6 +80,7 @@ class DatabaseManager:
 
         self.db_path = str(db_file)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._history_lock = threading.RLock()
         self.init_db()
 
     def init_db(self) -> None:
@@ -106,7 +117,28 @@ class DatabaseManager:
         )
 
         self._init_reviews()
+        self._init_price_history()
         self.conn.commit()
+
+    def _init_price_history(self) -> None:
+        """创建价格历史表，并在老库首次创建时补一条起始记录。"""
+        self.conn.execute(_PRICE_HISTORY_SCHEMA)
+
+    def _append_price_history(self, game: GameInfo) -> None:
+        """价格非空且与最近一条历史不同时追加记录。"""
+        raise NotImplementedError
+
+    def _save_games(self, games: list[GameInfo], commit: bool) -> None:
+        """在同一事务中写入游戏行及其价格历史。"""
+        raise NotImplementedError
+
+    def get_price_history(self) -> list[tuple[int, str, str, str]]:
+        """返回价格历史记录，供导出使用。
+
+        Returns:
+            按 app_id、recorded_at 升序的 (app_id, game_name, price, recorded_at) 列表。
+        """
+        raise NotImplementedError
 
     def _init_reviews(self) -> None:
         """迁移旧唯一约束，同时保留无法确定粒度的历史数据。
