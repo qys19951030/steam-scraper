@@ -85,10 +85,10 @@ def write_csv_files(
     published: list[Path] = []
     retain_backups = False
     try:
-        for (frame, _), target in zip(frames, targets, strict=True):
+        for frame, name in frames:
             exported = frame.map(_spreadsheet_text) if spreadsheet_safe else frame
             exported.to_csv(
-                temporary_dir / target.name,
+                temporary_dir / name,
                 index=False,
                 encoding="utf-8-sig",
                 # 所有文本都加 CSV 引号，防止独立 CR 被读成新的记录。
